@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Julia ${{ matrix.julia-version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.12"]
+        os: [ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.julia/packages
+            ~/.julia/compiled
+          key: ${{ runner.os }}-julia-${{ matrix.julia-version }}-${{ hashFiles('Project.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-julia-${{ matrix.julia-version }}-
+
+      - name: Instantiate
+        run: julia --project -e 'import Pkg; Pkg.instantiate()'
+
+      - name: Run tests
+        run: julia --project -e 'import Pkg; Pkg.test()'

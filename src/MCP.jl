@@ -1,0 +1,184 @@
+module MCP
+
+using JSON3
+
+export serve_mcp
+
+const PROTOCOL_VERSION = "2024-11-05"
+const SERVER_NAME      = "modelica-rag"
+const SERVER_VERSION   = "0.1.0"
+
+function serve_mcp(search_fn, lookup_fn, rebuild_fn, index_lib_fn)
+    while !eof(stdin)
+        line = readline(stdin)
+        isempty(line) && continue
+        req = try
+            JSON3.read(line)
+        catch e
+            @warn "Bad JSON from client: $e"
+            continue
+        end
+        handle(req, search_fn, lookup_fn, rebuild_fn, index_lib_fn)
+    end
+end
+
+function respond(id, result)
+    println(JSON3.write(Dict("jsonrpc" => "2.0", "id" => id, "result" => result)))
+    flush(stdout)
+end
+
+function respond_error(id, code::Int, msg::String)
+    println(JSON3.write(Dict(
+        "jsonrpc" => "2.0", "id" => id,
+        "error"   => Dict("code" => code, "message" => msg),
+    )))
+    flush(stdout)
+end
+
+function handle(req, search_fn, lookup_fn, rebuild_fn, index_lib_fn)
+    method = string(get(req, :method, ""))
+    id     = get(req, :id, nothing)
+
+    isnothing(id) && return
+    method == "notifications/initialized" && return
+
+    if method == "initialize"
+        respond(id, Dict(
+            "protocolVersion" => PROTOCOL_VERSION,
+            "capabilities"    => Dict("tools" => Dict()),
+            "serverInfo"      => Dict("name" => SERVER_NAME, "version" => SERVER_VERSION),
+        ))
+
+    elseif method == "tools/list"
+        respond(id, Dict("tools" => tool_specs()))
+
+    elseif method == "tools/call"
+        params    = get(req, :params, Dict())
+        tool_name = string(get(params, :name, ""))
+        args      = get(params, :arguments, Dict())
+        result    = dispatch(tool_name, args, search_fn, lookup_fn, rebuild_fn, index_lib_fn)
+        respond(id, result)
+
+    else
+        respond_error(id, -32601, "Method not found: $method")
+    end
+end
+
+function dispatch(name, args, search_fn, lookup_fn, rebuild_fn, index_lib_fn)
+    try
+        if name == "search_codebase"
+            query = string(get(args, :query, get(args, "query", "")))
+            top_k = Int(get(args, :top_k, get(args, "top_k", 5)))
+            results = search_fn(query, top_k)
+            return Dict("content" => [Dict("type" => "text", "text" => fmt_search(results))])
+
+        elseif name == "lookup_symbol"
+            sym = string(get(args, :name, get(args, "name", "")))
+            results = lookup_fn(sym)
+            return Dict("content" => [Dict("type" => "text", "text" => fmt_lookup(results))])
+
+        elseif name == "rebuild_index"
+            force = Bool(get(args, :force, get(args, "force", false)))
+            msg   = rebuild_fn(force)
+            return Dict("content" => [Dict("type" => "text", "text" => msg)])
+
+        elseif name == "index_library"
+            path  = string(get(args, :path, get(args, "path", "")))
+            force = Bool(get(args, :force, get(args, "force", false)))
+            isempty(path) && return Dict("content" => [Dict("type" => "text", "text" => "Error: path is required")], "isError" => true)
+            msg   = index_lib_fn(path, force)
+            return Dict("content" => [Dict("type" => "text", "text" => msg)])
+
+        else
+            return Dict("content" => [Dict("type" => "text", "text" => "Unknown tool: $name")],
+                        "isError" => true)
+        end
+    catch e
+        return Dict("content" => [Dict("type" => "text", "text" => "Error: $e")],
+                    "isError" => true)
+    end
+end
+
+function tool_specs()
+    [
+        Dict(
+            "name"        => "search_codebase",
+            "description" => "Semantic search over the Modelica library. Returns the most relevant models, functions, records, and connectors for the given query.",
+            "inputSchema" => Dict(
+                "type"       => "object",
+                "properties" => Dict(
+                    "query" => Dict("type" => "string",  "description" => "Natural-language search query about Modelica components"),
+                    "top_k" => Dict("type" => "integer", "description" => "Number of results (default 5)"),
+                ),
+                "required"   => ["query"],
+            ),
+        ),
+        Dict(
+            "name"        => "rebuild_index",
+            "description" => "Update the Modelica library search index. By default only re-indexes changed files (fast). Pass force=true to rebuild everything from scratch.",
+            "inputSchema" => Dict(
+                "type"       => "object",
+                "properties" => Dict(
+                    "force" => Dict("type" => "boolean",
+                                   "description" => "If true, clear and rebuild the entire index. Default false (incremental)."),
+                ),
+                "required"   => String[],
+            ),
+        ),
+        Dict(
+            "name"        => "index_library",
+            "description" => "Index a Modelica library at the given filesystem path. Incremental by default — only re-embeds changed files. Use force=true to rebuild from scratch.",
+            "inputSchema" => Dict(
+                "type"       => "object",
+                "properties" => Dict(
+                    "path"  => Dict("type" => "string",  "description" => "Absolute path to the Modelica library directory to index"),
+                    "force" => Dict("type" => "boolean", "description" => "If true, remove existing chunks for this path and re-embed everything. Default false."),
+                ),
+                "required"   => ["path"],
+            ),
+        ),
+        Dict(
+            "name"        => "lookup_symbol",
+            "description" => "Exact lookup of a Modelica class by qualified name (e.g. Modelica.Math.sin). Case-insensitive.",
+            "inputSchema" => Dict(
+                "type"       => "object",
+                "properties" => Dict(
+                    "name" => Dict("type" => "string", "description" => "Qualified Modelica class name to look up"),
+                ),
+                "required"   => ["name"],
+            ),
+        ),
+    ]
+end
+
+function fmt_search(results)::String
+    isempty(results) && return "No results found."
+    io = IOBuffer()
+    for (i, r) in enumerate(results)
+        c = r.chunk
+        println(io, "## Result $i  (similarity $(round(r.similarity; digits=3)))")
+        println(io, "**`$(c.symbol_name)`** — $(c.symbol_type)")
+        println(io, "`$(c.file_path):$(c.start_line)-$(c.end_line)`")
+        println(io, "```modelica")
+        println(io, c.content)
+        println(io, "```")
+        i < length(results) && println(io, "---")
+    end
+    String(take!(io))
+end
+
+function fmt_lookup(chunks)::String
+    isempty(chunks) && return "Symbol not found."
+    io = IOBuffer()
+    for (i, c) in enumerate(chunks)
+        println(io, "**`$(c.symbol_name)`** — $(c.symbol_type)")
+        println(io, "`$(c.file_path):$(c.start_line)-$(c.end_line)`")
+        println(io, "```modelica")
+        println(io, c.content)
+        println(io, "```")
+        i < length(chunks) && println(io, "---")
+    end
+    String(take!(io))
+end
+
+end # module MCP

@@ -1,0 +1,17 @@
+[embeddings]
+backend    = "ollama"              # "ollama" or "llama"
+url        = "http://localhost:11434"
+model      = "nomic-embed-text"    # Ollama model name; ignored for llama backend
+batch_size = 32
+
+[server]
+# Only used when backend = "llama". Julia starts llama-server automatically if needed.
+llama_server = "/path/to/llama.cpp/build/bin/llama-server"
+model_path   = "/path/to/models/some-embedding-model.gguf"
+
+[store]
+path = "/path/to/ModelicaRag.jl/data/index.db"
+
+[codebase]
+root       = "/path/to/Modelica/library"   # e.g. /usr/share/openmodelica/libraries/Modelica 4.0.0
+extensions = [".mo"]

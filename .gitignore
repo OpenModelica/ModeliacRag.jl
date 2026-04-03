@@ -1,0 +1,23 @@
+# Julia
+Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+
+# Machine-specific config (contains absolute local paths)
+config.toml
+.mcp.json
+
+# Claude Code local settings
+.claude/
+
+# Generated data / index database
+/data/
+
+# Cloned dependency repos (legacy, no longer used)
+/deps/repos/
+
+# Editor
+*.swp
+*~
+.DS_Store
