@@ -1,16 +1,73 @@
+# ModelicaRag configuration example
+#
+# Copy this file to config.toml and edit the paths for your machine.
+# config.toml is listed in .gitignore and will not be committed.
+
+# ---------------------------------------------------------------------------
+# Option A: GitHub Models (recommended — no local server required)
+#
+# Free for all GitHub users: 150 embedding requests/day.
+# Requires a GitHub personal access token (no special scopes needed).
+# Set GITHUB_TOKEN in your shell — do not put the token in this file.
+#
+#   export GITHUB_TOKEN=github_pat_...
+#
+# [embeddings]
+# backend    = "github_models"
+# model      = "text-embedding-3-small"   # or "text-embedding-3-large"
+# batch_size = 32
+#
+# ---------------------------------------------------------------------------
+# Option B: Ollama (local, no API key needed)
+#
+# Install Ollama (https://ollama.com), then pull the model:
+#   ollama pull nomic-embed-text
+#
+# ---------------------------------------------------------------------------
+# Option C: llama-server (local, GGUF model file required)
+#
+# Build llama.cpp and download a GGUF embedding model.
+# Julia starts the server automatically when needed.
+# ---------------------------------------------------------------------------
+
 [embeddings]
-backend    = "ollama"              # "ollama" or "llama"
-url        = "http://localhost:11434"
-model      = "nomic-embed-text"    # Ollama model name; ignored for llama backend
-batch_size = 32
+backend    = "ollama"                  # "github_models", "ollama", or "llama"
+url        = "http://localhost:11434"  # Ollama URL  (use "http://localhost:8080" for llama backend)
+model      = "nomic-embed-text"        # model name; for github_models use "text-embedding-3-small"
+batch_size = 32                        # number of chunks sent per embedding request
+
+# ---------------------------------------------------------------------------
+# llama-server settings
+#
+# Only used when backend = "llama".
+# Julia starts the server automatically and stops it on exit.
+# ---------------------------------------------------------------------------
 
 [server]
-# Only used when backend = "llama". Julia starts llama-server automatically if needed.
-llama_server = "/path/to/llama.cpp/build/bin/llama-server"
-model_path   = "/path/to/models/some-embedding-model.gguf"
+llama_server = "~/llama.cpp/build/bin/llama-server"                # path to the llama-server binary
+model_path   = "~/llama.cpp/models/Qwen3-Embedding-8B-Q8_0.gguf"  # path to GGUF model file
+
+# ---------------------------------------------------------------------------
+# Index database
+#
+# SQLite file that stores all parsed chunks and their embedding vectors.
+# The directory is created automatically on first run.
+# ---------------------------------------------------------------------------
 
 [store]
-path = "/path/to/ModelicaRag.jl/data/index.db"
+path = "data/index.db"   # can be absolute or relative to the project root
+
+# ---------------------------------------------------------------------------
+# Modelica library to index
+#
+# root       — top-level directory; all .mo files underneath are indexed.
+#              Point this at your Modelica Standard Library, e.g.:
+#                /usr/share/openmodelica/libraries/Modelica 4.0.0
+#              The indexer is incremental: only changed files are re-embedded
+#              on subsequent runs.
+#
+# extensions — file extensions to include.
+# ---------------------------------------------------------------------------
 
 [codebase]
 root       = "/path/to/Modelica/library"   # e.g. /usr/share/openmodelica/libraries/Modelica 4.0.0

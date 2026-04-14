@@ -16,15 +16,16 @@ export main, index_lib
 # ---------------------------------------------------------------------------
 
 struct Config
-    embed_backend::String  # "ollama" or "llama"
+    embed_backend::String  # "ollama", "llama", or "github_models"
     embed_url::String
-    embed_model::String    # Ollama model name (ignored for llama backend)
+    embed_model::String    # model name (Ollama or GitHub Models)
     embed_batch_size::Int
     store_path::String
     codebase_root::String
     codebase_extensions::Vector{String}
     server_exe::String     # path to llama-server binary (llama backend only)
     server_model::String   # path to GGUF model file (llama backend only)
+    github_token::String   # GitHub personal access token (github_models backend only)
 end
 
 function load_config(path::String)::Config
@@ -36,19 +37,23 @@ function load_config(path::String)::Config
     Config(
         get(e,  "backend",      "llama"),
         get(e,  "url",          "http://localhost:8080"),
-        get(e,  "model",        "nomic-embed-text"),
+        get(e,  "model",        "text-embedding-3-small"),
         get(e,  "batch_size",   32),
         get(s,  "path",         "data/index.db"),
         get(c,  "root",         "."),
         get(c,  "extensions",   [".mo"]),
         expanduser(get(sv, "llama_server", "~/llama.cpp/build/bin/llama-server")),
         expanduser(get(sv, "model_path",   "~/llama.cpp/models/Qwen3-Embedding-8B-Q8_0.gguf")),
+        get(e,  "token",        get(ENV, "GITHUB_TOKEN", "")),
     )
 end
 
 function make_embedder(cfg::Config)
     if cfg.embed_backend == "ollama"
         OllamaEmbedder(cfg.embed_url, cfg.embed_model)
+    elseif cfg.embed_backend == "github_models"
+        isempty(cfg.github_token) && error("GitHub token required: set GITHUB_TOKEN or add token = \"...\" under [embeddings] in config.toml")
+        GithubModelsEmbedder(cfg.github_token, cfg.embed_model)
     else
         LlamaEmbedder(cfg.embed_url)
     end
@@ -238,6 +243,8 @@ function cmd_serve(cfg::Config)
 
     lookup_fn = (name::String) -> lookup_symbol(db, name)
 
+    fuzzy_fn = (pattern::String, top_k::Int) -> fuzzy_lookup(db, pattern, top_k)
+
     rebuild_fn = (force::Bool) -> begin
         @info "$(force ? "Force rebuilding" : "Incrementally updating") index ..."
         try
@@ -261,7 +268,7 @@ function cmd_serve(cfg::Config)
         end
     end
 
-    serve_mcp(search_fn, lookup_fn, rebuild_fn, index_lib_fn)
+    serve_mcp(search_fn, lookup_fn, fuzzy_fn, rebuild_fn, index_lib_fn)
 end
 
 # ---------------------------------------------------------------------------
@@ -292,11 +299,28 @@ function cmd_search(cfg::Config, query::String; top_k::Int = 5)
 end
 
 # ---------------------------------------------------------------------------
+# Fuzzy command
+# ---------------------------------------------------------------------------
+
+function cmd_fuzzy(cfg::Config, pattern::String; top_k::Int = 10)
+    db      = open_store(cfg.store_path)
+    results = fuzzy_lookup(db, pattern, top_k)
+    if isempty(results)
+        println("No symbols matching \"$pattern\".")
+        return
+    end
+    for c in results
+        println("$(c.symbol_type)  $(c.symbol_name)")
+        println("  $(c.file_path):$(c.start_line)-$(c.end_line)")
+    end
+end
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 function main(args = ARGS)
-    isempty(args) && (println(stderr, "Usage: ModelicaRag.main([\"index\"|\"serve\"|\"search\", ...])"); exit(1))
+    isempty(args) && (println(stderr, "Usage: ModelicaRag.main([\"index\"|\"serve\"|\"search\"|\"fuzzy\", ...])"); exit(1))
 
     command     = args[1]
     config_path = "config.toml"
@@ -336,8 +360,11 @@ function main(args = ARGS)
     elseif command == "search"
         isempty(query_parts) && (println(stderr, "Usage: ModelicaRag.main([\"search\", \"<query>\", ...])"); exit(1))
         cmd_search(cfg, join(query_parts, " "); top_k)
+    elseif command == "fuzzy"
+        isempty(query_parts) && (println(stderr, "Usage: ModelicaRag.main([\"fuzzy\", \"<pattern>\"])"); exit(1))
+        cmd_fuzzy(cfg, join(query_parts, " "); top_k)
     else
-        println(stderr, "Unknown command: $command  (expected index, serve, or search)")
+        println(stderr, "Unknown command: $command  (expected index, serve, search, or fuzzy)")
         exit(1)
     end
 end

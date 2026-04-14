@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "modelica-rag": {
+      "command": "julia",
+      "args": [
+        "-e",
+        "push!(LOAD_PATH, \"/path/to/ModelicaRag.jl\"); using ModelicaRag; ModelicaRag.main([\"serve\"])"
+      ],
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      }
+    }
+  }
+}

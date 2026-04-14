@@ -5,7 +5,7 @@ using SQLite.DBInterface: execute
 using LinearAlgebra
 
 export open_store, clear_store, insert_chunk, insert_chunks_batch, search_chunks,
-       lookup_symbol, chunk_count, get_indexed_mtimes, set_file_mtime, delete_file_chunks
+       lookup_symbol, fuzzy_lookup, chunk_count, get_indexed_mtimes, set_file_mtime, delete_file_chunks
 
 const SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunks (
@@ -132,6 +132,20 @@ function lookup_symbol(db::SQLite.DB, name::String)::Vector{ChunkRecord}
         FROM chunks
         WHERE symbol_name = ? COLLATE NOCASE
     """, (name,))
+    [ChunkRecord(row.id, row.file_path, row.start_line, row.end_line,
+                 row.symbol_name, row.symbol_type, row.content)
+     for row in rows]
+end
+
+function fuzzy_lookup(db::SQLite.DB, pattern::String, top_k::Int = 10)::Vector{ChunkRecord}
+    like_pattern = "%" * replace(pattern, "%" => "\\%", "_" => "\\_") * "%"
+    rows = execute(db, """
+        SELECT id, file_path, start_line, end_line, symbol_name, symbol_type, content
+        FROM chunks
+        WHERE symbol_name LIKE ? ESCAPE '\\'
+        ORDER BY symbol_name COLLATE NOCASE
+        LIMIT ?
+    """, (like_pattern, top_k))
     [ChunkRecord(row.id, row.file_path, row.start_line, row.end_line,
                  row.symbol_name, row.symbol_type, row.content)
      for row in rows]

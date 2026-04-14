@@ -8,7 +8,7 @@ const PROTOCOL_VERSION = "2024-11-05"
 const SERVER_NAME      = "modelica-rag"
 const SERVER_VERSION   = "0.1.0"
 
-function serve_mcp(search_fn, lookup_fn, rebuild_fn, index_lib_fn)
+function serve_mcp(search_fn, lookup_fn, fuzzy_fn, rebuild_fn, index_lib_fn)
     while !eof(stdin)
         line = readline(stdin)
         isempty(line) && continue
@@ -18,7 +18,7 @@ function serve_mcp(search_fn, lookup_fn, rebuild_fn, index_lib_fn)
             @warn "Bad JSON from client: $e"
             continue
         end
-        handle(req, search_fn, lookup_fn, rebuild_fn, index_lib_fn)
+        handle(req, search_fn, lookup_fn, fuzzy_fn, rebuild_fn, index_lib_fn)
     end
 end
 
@@ -35,7 +35,7 @@ function respond_error(id, code::Int, msg::String)
     flush(stdout)
 end
 
-function handle(req, search_fn, lookup_fn, rebuild_fn, index_lib_fn)
+function handle(req, search_fn, lookup_fn, fuzzy_fn, rebuild_fn, index_lib_fn)
     method = string(get(req, :method, ""))
     id     = get(req, :id, nothing)
 
@@ -56,7 +56,7 @@ function handle(req, search_fn, lookup_fn, rebuild_fn, index_lib_fn)
         params    = get(req, :params, Dict())
         tool_name = string(get(params, :name, ""))
         args      = get(params, :arguments, Dict())
-        result    = dispatch(tool_name, args, search_fn, lookup_fn, rebuild_fn, index_lib_fn)
+        result    = dispatch(tool_name, args, search_fn, lookup_fn, fuzzy_fn, rebuild_fn, index_lib_fn)
         respond(id, result)
 
     else
@@ -64,7 +64,7 @@ function handle(req, search_fn, lookup_fn, rebuild_fn, index_lib_fn)
     end
 end
 
-function dispatch(name, args, search_fn, lookup_fn, rebuild_fn, index_lib_fn)
+function dispatch(name, args, search_fn, lookup_fn, fuzzy_fn, rebuild_fn, index_lib_fn)
     try
         if name == "search_codebase"
             query = string(get(args, :query, get(args, "query", "")))
@@ -75,6 +75,13 @@ function dispatch(name, args, search_fn, lookup_fn, rebuild_fn, index_lib_fn)
         elseif name == "lookup_symbol"
             sym = string(get(args, :name, get(args, "name", "")))
             results = lookup_fn(sym)
+            return Dict("content" => [Dict("type" => "text", "text" => fmt_lookup(results))])
+
+        elseif name == "fuzzy_lookup"
+            pattern = string(get(args, :pattern, get(args, "pattern", "")))
+            top_k   = Int(get(args, :top_k, get(args, "top_k", 10)))
+            isempty(pattern) && return Dict("content" => [Dict("type" => "text", "text" => "Error: pattern is required")], "isError" => true)
+            results = fuzzy_fn(pattern, top_k)
             return Dict("content" => [Dict("type" => "text", "text" => fmt_lookup(results))])
 
         elseif name == "rebuild_index"
@@ -146,6 +153,18 @@ function tool_specs()
                     "name" => Dict("type" => "string", "description" => "Qualified Modelica class name to look up"),
                 ),
                 "required"   => ["name"],
+            ),
+        ),
+        Dict(
+            "name"        => "fuzzy_lookup",
+            "description" => "Find Modelica declarations whose name contains the given pattern (case-insensitive substring match). Useful when you remember part of a name but not the full qualified path.",
+            "inputSchema" => Dict(
+                "type"       => "object",
+                "properties" => Dict(
+                    "pattern" => Dict("type" => "string",  "description" => "Substring to match against symbol names, e.g. \"HeatTransfer\" or \"sin\""),
+                    "top_k"   => Dict("type" => "integer", "description" => "Maximum number of results (default 10)"),
+                ),
+                "required"   => ["pattern"],
             ),
         ),
     ]

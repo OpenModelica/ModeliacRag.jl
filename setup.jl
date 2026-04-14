@@ -1,21 +1,22 @@
 #!/usr/bin/env julia
 # setup.jl — detect embedding backend and Modelica library, generate config.toml.
-# Safe to re-run: will NOT overwrite an existing config.toml.
+# Safe to re-run: asks before overwriting an existing config.toml.
+import Dates
 
 const PROJECT_DIR = dirname(abspath(@__FILE__))
 const CONFIG_PATH = joinpath(PROJECT_DIR, "config.toml")
 
-if isfile(CONFIG_PATH)
-    println("config.toml already exists — delete it to regenerate.")
-    exit(0)
-end
+println("=" ^ 60)
+println("ModelicaRag — setup")
+println("=" ^ 60)
+println()
 
-# ── detect Ollama ──────────────────────────────────────────────────────────
+# ── detect backends ────────────────────────────────────────────────────────
+
+github_token = get(ENV, "GITHUB_TOKEN", "")
 
 ollama_bin = Sys.which("ollama")
 has_ollama = ollama_bin !== nothing
-
-# ── detect llama-server ────────────────────────────────────────────────────
 
 llama_candidates = [
     expanduser("~/llama.cpp/build/bin/llama-server"),
@@ -25,99 +26,129 @@ llama_candidates = [
 llama_exe_idx = findfirst(isfile, llama_candidates)
 llama_exe     = llama_exe_idx !== nothing ? llama_candidates[llama_exe_idx] : ""
 
-# ── find an embedding GGUF model ──────────────────────────────────────────
-
 function find_embed_model()
-    model_dirs = [expanduser("~/llama.cpp/models")]
-    for d in model_dirs
+    for d in [expanduser("~/llama.cpp/models")]
         isdir(d) || continue
-        candidates = filter(readdir(d)) do f
-            endswith(f, ".gguf") && occursin("embed", lowercase(f))
-        end
+        candidates = filter(f -> endswith(f, ".gguf") && occursin("embed", lowercase(f)), readdir(d))
         isempty(candidates) || return joinpath(d, first(candidates))
     end
     return ""
 end
-
 gguf_model = find_embed_model()
+
+# ── report detections ──────────────────────────────────────────────────────
+
+println("Available embedding backends:")
+!isempty(github_token) && println("  [1] github_models  (GITHUB_TOKEN detected — free, no local server needed)")
+has_ollama              && println("  [2] ollama         (Ollama found at $ollama_bin)")
+!isempty(llama_exe)     && println("  [3] llama          (llama-server found at $llama_exe)")
+println()
+
+backend = if !isempty(github_token)
+    "github_models"
+elseif has_ollama
+    "ollama"
+elseif !isempty(llama_exe)
+    "llama"
+else
+    println("No embedding backend detected.")
+    println("Options:")
+    println("  - Install Ollama (https://ollama.com) and run: ollama pull nomic-embed-text")
+    println("  - Set GITHUB_TOKEN to use the GitHub Models free API")
+    println("  - Build llama-server from llama.cpp")
+    println()
+    "ollama"
+end
+
+print("Embedding backend [$backend]: ")
+answer = strip(readline())
+backend = isempty(answer) ? backend : answer
+
+embed_url   = "http://localhost:8080"
+embed_model = "text-embedding-3-small"
+
+if backend == "ollama"
+    embed_url   = "http://localhost:11434"
+    embed_model = "nomic-embed-text"
+elseif backend == "github_models"
+    print("GitHub embedding model [text-embedding-3-small]: ")
+    m = strip(readline())
+    embed_model = isempty(m) ? "text-embedding-3-small" : m
+end
 
 # ── find Modelica Standard Library ────────────────────────────────────────
 
 function find_modelica_library()
-    search_roots = [
-        "/usr/share/openmodelica/libraries",
-        "/usr/lib/omlibrary",
-        "/usr/local/lib/omlibrary",
-        expanduser("~/.openmodelica/libraries"),
-    ]
-    for root in search_roots
+    for root in ["/usr/share/openmodelica/libraries", "/usr/lib/omlibrary",
+                 "/usr/local/lib/omlibrary", expanduser("~/.openmodelica/libraries")]
         isdir(root) || continue
         for entry in readdir(root)
-            if startswith(entry, "Modelica") && isdir(joinpath(root, entry))
-                return joinpath(root, entry)
-            end
+            startswith(entry, "Modelica") && isdir(joinpath(root, entry)) && return joinpath(root, entry)
         end
     end
     return ""
 end
 
 mo_lib = find_modelica_library()
+println("\nModelica library: $(isempty(mo_lib) ? "not found" : mo_lib)")
 
-# ── decide backend ─────────────────────────────────────────────────────────
+print("Modelica library root [$(isempty(mo_lib) ? "/path/to/Modelica/library" : mo_lib)]: ")
+answer = strip(readline())
+mo_lib = isempty(answer) ? mo_lib : answer
 
-backend   = has_ollama ? "ollama" : "llama"
-embed_url = has_ollama ? "http://localhost:11434" : "http://localhost:8080"
+# ── check for existing config ──────────────────────────────────────────────
 
-# ── report ─────────────────────────────────────────────────────────────────
-
-println("=== Modelica RAG Setup ===\n")
-
-println("Embedding backend:")
-if has_ollama
-    println("  found  Ollama at $ollama_bin  →  backend = \"ollama\"")
-else
-    println("  miss   Ollama (not in PATH)")
+if isfile(CONFIG_PATH)
+    print("\nconfig.toml already exists. Overwrite? [y/N]: ")
+    answer = lowercase(strip(readline()))
+    answer in ("y", "yes") || (println("Aborted."); exit(0))
 end
-if !isempty(llama_exe)
-    println("  found  llama-server at $llama_exe")
-else
-    println("  miss   llama-server")
-end
-if !has_ollama && isempty(llama_exe)
-    println("\n  WARNING: no embedding backend found.")
-    println("  Install Ollama (https://ollama.ai) or build llama.cpp, then re-run setup.jl.")
-end
-
-println("\nGGUF model : $(isempty(gguf_model) ? "not found" : gguf_model)")
-println("Modelica   : $(isempty(mo_lib)    ? "not found — set [codebase] root manually" : mo_lib)")
-println()
 
 # ── write config.toml ─────────────────────────────────────────────────────
 
 mkpath(joinpath(PROJECT_DIR, "data"))
 
 open(CONFIG_PATH, "w") do io
-    write(io, """
-[embeddings]
-backend    = "$backend"
-url        = "$embed_url"
-model      = "nomic-embed-text"   # Ollama model name; ignored for llama backend
-batch_size = 32
-
-[server]
-# Only used when backend = "llama". Julia starts llama-server automatically if needed.
-llama_server = "$(isempty(llama_exe) ? "~/llama.cpp/build/bin/llama-server" : llama_exe)"
-model_path   = "$(isempty(gguf_model) ? "~/llama.cpp/models/Qwen3-Embedding-8B-Q8_0.gguf" : gguf_model)"
-
-[store]
-path = "$(joinpath(PROJECT_DIR, "data", "index.db"))"
-
-[codebase]
-$(isempty(mo_lib) ? "# TODO: set this to your Modelica library path\nroot       = \"/path/to/Modelica/library\"" :
-                    "root       = \"$mo_lib\"")
-extensions = [".mo"]
-""")
+    println(io, "# Generated by setup.jl on $(Dates.today())")
+    println(io, "# Run `julia setup.jl` again to regenerate.\n")
+    println(io, "[embeddings]")
+    println(io, "backend    = \"$backend\"")
+    if backend == "ollama"
+        println(io, "url        = \"$embed_url\"")
+        println(io, "model      = \"$embed_model\"")
+    elseif backend == "github_models"
+        println(io, "model      = \"$embed_model\"")
+        println(io, "# token is read from the GITHUB_TOKEN environment variable.")
+    else
+        println(io, "url        = \"$embed_url\"")
+    end
+    println(io, "batch_size = 32\n")
+    println(io, "[server]")
+    println(io, "llama_server = \"$(isempty(llama_exe) ? "~/llama.cpp/build/bin/llama-server" : llama_exe)\"")
+    println(io, "model_path   = \"$(isempty(gguf_model) ? "~/llama.cpp/models/Qwen3-Embedding-8B-Q8_0.gguf" : gguf_model)\"\n")
+    println(io, "[store]")
+    println(io, "path = \"$(joinpath(PROJECT_DIR, "data", "index.db"))\"\n")
+    println(io, "[codebase]")
+    if isempty(mo_lib) || mo_lib == "/path/to/Modelica/library"
+        println(io, "# TODO: set this to your Modelica library path")
+        println(io, "root       = \"/path/to/Modelica/library\"")
+    else
+        println(io, "root       = \"$mo_lib\"")
+    end
+    println(io, "extensions = [\".mo\"]")
 end
 
-println("Written: $CONFIG_PATH")
-isempty(mo_lib) && println("\n  ACTION REQUIRED: edit config.toml and set [codebase] root")
+println("\nWritten: $CONFIG_PATH")
+(isempty(mo_lib) || mo_lib == "/path/to/Modelica/library") &&
+    println("\n  ACTION REQUIRED: edit config.toml and set [codebase] root")
+println()
+println("Next steps:")
+if backend == "github_models"
+    println("  1. export GITHUB_TOKEN=<your token>")
+    println("  2. julia -e 'push!(LOAD_PATH, \".\"); using ModelicaRag; ModelicaRag.main([\"index\"])'")
+elseif backend == "ollama"
+    println("  1. ollama pull $embed_model")
+    println("  2. julia -e 'push!(LOAD_PATH, \".\"); using ModelicaRag; ModelicaRag.main([\"index\"])'")
+else
+    println("  julia -e 'push!(LOAD_PATH, \".\"); using ModelicaRag; ModelicaRag.main([\"index\"])'")
+end

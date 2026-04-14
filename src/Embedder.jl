@@ -3,7 +3,7 @@ module Embedder
 using HTTP
 using JSON3
 
-export LlamaEmbedder, OllamaEmbedder, embed, embed_batch
+export LlamaEmbedder, OllamaEmbedder, GithubModelsEmbedder, embed, embed_batch
 
 # ── llama-server backend ───────────────────────────────────────────────────
 
@@ -77,6 +77,45 @@ end
 # Ollama has no native batch endpoint — embed sequentially.
 function embed_batch(e::OllamaEmbedder, texts::Vector{String})::Vector{Vector{Float32}}
     [embed(e, t) for t in texts]
+end
+
+# ── GitHub Models backend ──────────────────────────────────────────────────
+#
+# Uses the GitHub Models free embedding API (OpenAI-compatible).
+# Each GitHub user gets 150 requests/day at no cost.
+# Token is read from the GITHUB_TOKEN environment variable if not supplied.
+
+struct GithubModelsEmbedder
+    token::String   # GitHub personal access token
+    model::String   # e.g. "text-embedding-3-small" or "text-embedding-3-large"
+end
+
+function GithubModelsEmbedder(; model::String = "text-embedding-3-small",
+                                token::String  = get(ENV, "GITHUB_TOKEN", ""))
+    isempty(token) && error("GitHub token required: set GITHUB_TOKEN or pass token=")
+    GithubModelsEmbedder(token, model)
+end
+
+const GITHUB_MODELS_URL = "https://models.inference.ai.azure.com/embeddings"
+
+function embed(e::GithubModelsEmbedder, text::String)::Vector{Float32}
+    first(embed_batch(e, [text]))
+end
+
+function embed_batch(e::GithubModelsEmbedder, texts::Vector{String})::Vector{Vector{Float32}}
+    body = JSON3.write(Dict("input" => texts, "model" => e.model))
+    resp = HTTP.post(
+        GITHUB_MODELS_URL,
+        ["Content-Type"  => "application/json",
+         "Authorization" => "Bearer $(e.token)"],
+        body;
+        retry       = false,
+        readtimeout = 120,
+    )
+    data = JSON3.read(resp.body)
+    haskey(data, :data) || error("Unexpected GitHub Models response: $data")
+    sorted = sort(collect(data.data), by = x -> x.index)
+    [Float32.(x.embedding) for x in sorted]
 end
 
 # ── shared helpers ─────────────────────────────────────────────────────────
