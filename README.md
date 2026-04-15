@@ -105,6 +105,28 @@ root       = "/path/to/Modelica/library"
 extensions = [".mo"]
 ```
 
+## Playground
+
+The quickest way to see the tool in action is the included playground script. It indexes the Modelica Standard Library and runs a set of example searches, lookups, and fuzzy queries.
+
+```bash
+export GITHUB_TOKEN=github_pat_...
+julia --project playground.jl
+
+# or pass the library path explicitly:
+julia --project playground.jl /usr/share/openmodelica/libraries/Modelica\ 4.0.0
+```
+
+The playground writes its own index to `data/playground.db` (separate from the main index). Subsequent runs are incremental — only changed files are re-embedded, so re-runs are fast. The four semantic searches use four API requests from the free tier (150/day).
+
+**No local installation needed — try it in a Codespace:**
+
+Click "Code > Open with Codespaces" on the repository page. The devcontainer installs Julia, clones the Modelica Standard Library into `data/msl/`, and runs `Pkg.instantiate()` automatically. `GITHUB_TOKEN` is provided by Codespaces, so the playground works with no extra configuration:
+
+```bash
+julia --project playground.jl
+```
+
 ## Usage
 
 ```julia

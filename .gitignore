@@ -10,6 +10,7 @@ Manifest.toml
 !.gitignore
 !.github
 !.mcp.json.example
+!.devcontainer
 
 # Local config (keep the example)
 config.toml

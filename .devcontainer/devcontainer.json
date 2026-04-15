@@ -1,0 +1,15 @@
+{
+  "name": "ModelicaRag",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/julia:1": {
+      "version": "1.12"
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/postCreate.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": ["julialang.language-julia"]
+    }
+  }
+}
