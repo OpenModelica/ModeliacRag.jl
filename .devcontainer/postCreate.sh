@@ -18,6 +18,16 @@ else
 fi
 
 echo ""
+echo "Registering Julia registries (General + OpenModelicaRegistry)..."
+julia --project -e '
+using Pkg
+existing = Set(r.name for r in Pkg.Registry.reachable_registries())
+"General" in existing || Pkg.Registry.add("General")
+"OpenModelicaRegistry" in existing ||
+    Pkg.Registry.add(Pkg.RegistrySpec(url = "https://github.com/OpenModelica/OpenModelicaRegistry.git"))
+'
+
+echo ""
 echo "Installing Julia package dependencies..."
 julia --project -e 'import Pkg; Pkg.instantiate()'
 
